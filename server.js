@@ -1,0 +1,179 @@
+require("dotenv").config();
+const express = require("express")
+const mongoose = require("mongoose")
+const cors = require("cors")
+const multer = require("multer")
+const jwt = require("jsonwebtoken")
+const bcrypt = require("bcryptjs")
+
+const app = express()
+
+app.use(cors())
+app.use(express.json())
+app.use("/uploads",express.static("uploads"))
+
+mongoose.connect(process.env.MONGO_URI)
+.then(()=>console.log("MongoDB connecté"))
+.catch(err=>console.log(err))
+
+const Reservation = require("./models/Reservation")
+const Teacher = require("./models/Teacher")
+const Admin = require("./models/Admin")
+
+const storage = multer.diskStorage({
+
+destination:(req,file,cb)=>{
+cb(null,"uploads")
+},
+
+filename:(req,file,cb)=>{
+cb(null,Date.now()+"-"+file.originalname)
+}
+
+})
+
+const upload = multer({storage})
+
+function authMiddleware(req,res,next){
+
+const token = req.headers.authorization
+
+if(!token){
+return res.status(401).json({message:"Access denied"})
+}
+
+try{
+
+const verified = jwt.verify(token,"SUPER_SECRET_KEY")
+
+req.admin = verified
+
+next()
+
+}catch(err){
+
+res.status(401).json({message:"Invalid token"})
+
+}
+
+}
+
+app.post("/api/admin/login", async(req,res)=>{
+
+const {email,password} = req.body
+
+const admin = await Admin.findOne({email})
+
+if(!admin){
+return res.status(401).json({message:"Admin not found"})
+}
+
+const isMatch = await bcrypt.compare(password,admin.password)
+
+if(!isMatch){
+return res.status(401).json({message:"Wrong password"})
+}
+
+const token = jwt.sign(
+{adminId:admin._id},
+"SUPER_SECRET_KEY",
+{expiresIn:"24h"}
+)
+
+res.json({token})
+
+})
+
+app.post("/api/reservations", async(req,res)=>{
+
+const reservation = new Reservation(req.body)
+
+await reservation.save()
+
+res.json({success:true})
+
+})
+
+app.get("/api/reservations", async(req,res)=>{
+
+const data = await Reservation.find().sort({createdAt:-1})
+
+res.json(data)
+
+})
+
+app.delete("/api/reservations/:id",authMiddleware,async(req,res)=>{
+
+await Reservation.findByIdAndDelete(req.params.id)
+
+res.json({success:true})
+
+})
+
+app.put("/api/reservations/:id",authMiddleware,async(req,res)=>{
+
+await Reservation.findByIdAndUpdate(req.params.id,req.body)
+
+res.json({success:true})
+
+})
+
+app.post("/api/teachers",upload.single("cv"),async(req,res)=>{
+
+const teacher = new Teacher({
+
+nom:req.body.nom,
+prenom:req.body.prenom,
+email:req.body.email,
+telephone:req.body.telephone,
+specialite:req.body.specialite,
+experience:req.body.experience,
+cv:req.file ? req.file.filename : ""
+
+})
+
+await teacher.save()
+
+res.json({success:true})
+
+})
+
+app.get("/api/teachers",async(req,res)=>{
+
+const data = await Teacher.find().sort({createdAt:-1})
+
+res.json(data)
+
+})
+
+app.delete("/api/teachers/:id",authMiddleware,async(req,res)=>{
+
+await Teacher.findByIdAndDelete(req.params.id)
+
+res.json({success:true})
+
+})
+
+app.put("/api/teachers/:id",authMiddleware,upload.single("cv"),async(req,res)=>{
+
+const teacher = await Teacher.findById(req.params.id)
+
+teacher.nom = req.body.nom
+teacher.email = req.body.email
+teacher.specialite = req.body.specialite
+
+if(req.file){
+teacher.cv = req.file.filename
+}
+
+await teacher.save()
+
+res.json({success:true})
+
+})
+
+const PORT = process.env.PORT || 5000
+
+app.listen(PORT, () => {
+console.log("Server running on port " + PORT)
+})
